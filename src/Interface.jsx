@@ -73,7 +73,7 @@ export default function Interface(props) {
   }, [props.messages]);
 
   return (
-    <div className="w-full h-screen min-w-[492px] min-h-[238px] bg-slate-800 flex flex-col overflow-hidden">
+    <div className="w-full h-screen min-w-[492px] min-h-[238px]  bg-black flex flex-col overflow-hidden">
       <div className="h-1/5 flex justify-between items-center text-md text-slate-400 select-none p-8">
         <Logo className="h-8 w-auto text-slate-100" />
         <div>

@@ -1,8 +1,6 @@
 #include "PluginProcessor.h"
 #include "WebViewEditor.h"
-
 #include <choc_javascript_QuickJS.h>
-
 
 //==============================================================================
 // A quick helper for locating bundled asset files
@@ -12,7 +10,7 @@ juce::File getAssetsDirectory()
     auto assetsDir = juce::File::getSpecialLocation(juce::File::SpecialLocationType::currentApplicationFile)
         .getChildFile("Contents/Resources/dist");
 #elif JUCE_WINDOWS
-    auto assetsDir = juce::File::getSpecialLocation(juce::File::SpecialLocationType::currentExecutableFile) // Plugin.vst3/Contents/<arch>/Plugin.vst3
+    auto assetsDir = juce::File::getSpecialLocation(juce::File::SpecialLocationType::currentExecutableFile)
         .getParentDirectory()  // Plugin.vst3/Contents/<arch>/
         .getParentDirectory()  // Plugin.vst3/Contents/
         .getChildFile("Resources/dist");
@@ -23,75 +21,82 @@ juce::File getAssetsDirectory()
     return assetsDir;
 }
 
-//==============================================================================
-EffectsPluginProcessor::EffectsPluginProcessor()
-     : AudioProcessor (BusesProperties()
-                       .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                       .withOutput ("Output", juce::AudioChannelSet::stereo(), true))
-     , jsContext(choc::javascript::createQuickJSContext())
+void EffectsPluginProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
-    // Initialize parameters from the manifest file
-#if ELEM_DEV_LOCALHOST
-    auto manifestFile = juce::URL("http://localhost:5173/manifest.json");
-    auto manifestFileContents = manifestFile.readEntireTextStream().toStdString();
-#else
-    auto manifestFile = getAssetsDirectory().getChildFile("manifest.json");
+    juce::XmlElement xml("MYPLUGINSETTINGS");
 
-    if (!manifestFile.existsAsFile())
-        return;
+    // Store any necessary state information here
 
-    auto manifestFileContents = manifestFile.loadFileAsString().toStdString();
-#endif
+    copyXmlToBinary(xml, destData);
+}
 
-    auto manifest = elem::js::parseJSON(manifestFileContents);
+void EffectsPluginProcessor::setStateInformation(const void* data, int sizeInBytes)
+{
+    std::unique_ptr<juce::XmlElement> xmlState(getXmlFromBinary(data, sizeInBytes));
 
-    if (!manifest.isObject())
-        return;
-
-    auto parameters = manifest.getWithDefault("parameters", elem::js::Array());
-
-    for (size_t i = 0; i < parameters.size(); ++i) {
-        auto descrip = parameters[i];
-
-        if (!descrip.isObject())
-            continue;
-
-        auto paramId = descrip.getWithDefault("paramId", elem::js::String("unknown"));
-        auto name = descrip.getWithDefault("name", elem::js::String("Unknown"));
-        auto minValue = descrip.getWithDefault("min", elem::js::Number(0));
-        auto maxValue = descrip.getWithDefault("max", elem::js::Number(1));
-        auto defValue = descrip.getWithDefault("defaultValue", elem::js::Number(0));
-
-        auto* p = new juce::AudioParameterFloat(
-            juce::ParameterID(paramId, 1),
-            name,
-            {static_cast<float>(minValue), static_cast<float>(maxValue)},
-            defValue
-        );
-
-        p->addListener(this);
-        addParameter(p);
-
-        // Push a new ParameterReadout onto the list to represent this parameter
-        paramReadouts.emplace_back(ParameterReadout { static_cast<float>(defValue), false });
-
-        // Update our state object with the default parameter value
-        state.insert_or_assign(paramId, defValue);
+    if (xmlState != nullptr)
+    {
+        if (xmlState->hasTagName("MYPLUGINSETTINGS"))
+        {
+            // Retrieve any necessary state information here
+        }
     }
 }
 
+//==============================================================================
+// Constructor
+EffectsPluginProcessor::EffectsPluginProcessor()
+    : AudioProcessor(BusesProperties()
+                      .withInput("Input", juce::AudioChannelSet::stereo(), true)
+                      .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
+      jsContext(choc::javascript::createQuickJSContext())
+{
+    try {
+        initJavaScriptEngine(); // Initialize the JavaScript engine in the constructor
+        startFetchingMessages(); // Start fetching messages
+    } catch (const std::exception& e) {
+        DBG("Exception in constructor: " << e.what());
+    } catch (...) {
+        DBG("Unknown exception in constructor");
+    }
+}
+
+//==============================================================================
+// Destructor
 EffectsPluginProcessor::~EffectsPluginProcessor()
 {
-    for (auto& p : getParameters())
-    {
-        p->removeListener(this);
+    try {
+        stopFetchingMessages(); // Stop fetching messages when the processor is destroyed
+    } catch (const std::exception& e) {
+        DBG("Exception in destructor: " << e.what());
+    } catch (...) {
+        DBG("Unknown exception in destructor");
     }
+}
+
+void EffectsPluginProcessor::startFetchingMessages()
+{
+   // startTimer(10000);  Fetch messages every 10 seconds
+}
+
+void EffectsPluginProcessor::stopFetchingMessages()
+{
+    stopTimer(); // Stop the timer
+}
+
+void EffectsPluginProcessor::timerCallback()
+{
+    fetchNewMessages(); // Fetch new messages every time the timer ticks
 }
 
 //==============================================================================
 juce::AudioProcessorEditor* EffectsPluginProcessor::createEditor()
 {
-    return new WebViewEditor(this, getAssetsDirectory(), 800, 704);
+    auto* editor = new WebViewEditor(this, getAssetsDirectory(), 2000, 500);
+    if (!editor->getWebViewPtr()) {
+        DBG("Failed to initialize WebViewEditor");
+    }
+    return editor;
 }
 
 bool EffectsPluginProcessor::hasEditor() const
@@ -128,8 +133,7 @@ double EffectsPluginProcessor::getTailLengthSeconds() const
 //==============================================================================
 int EffectsPluginProcessor::getNumPrograms()
 {
-    return 1;   // NB: some hosts don't cope very well if you tell them there are 0 programs,
-                // so this should be at least 1, even if you're not really implementing programs.
+    return 1;
 }
 
 int EffectsPluginProcessor::getCurrentProgram()
@@ -137,163 +141,119 @@ int EffectsPluginProcessor::getCurrentProgram()
     return 0;
 }
 
-void EffectsPluginProcessor::setCurrentProgram (int /* index */) {}
-const juce::String EffectsPluginProcessor::getProgramName (int /* index */) { return {}; }
-void EffectsPluginProcessor::changeProgramName (int /* index */, const juce::String& /* newName */) {}
+void EffectsPluginProcessor::setCurrentProgram(int /* index */) {}
+const juce::String EffectsPluginProcessor::getProgramName(int /* index */) { return {}; }
+void EffectsPluginProcessor::changeProgramName(int /* index */, const juce::String& /* newName */) {}
 
-//==============================================================================
-void EffectsPluginProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+void EffectsPluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
-    // Some hosts call `prepareToPlay` on the real-time thread, some call it on the main thread.
-    // To address the discrepancy, we check whether anything has changed since our last known
-    // call. If it has, we flag for initialization of the Elementary engine and runtime, then
-    // trigger an async update.
-    //
-    // JUCE will synchronously handle the async update if it understands
-    // that we're already on the main thread.
-    if (sampleRate != lastKnownSampleRate || samplesPerBlock != lastKnownBlockSize) {
-        lastKnownSampleRate = sampleRate;
-        lastKnownBlockSize = samplesPerBlock;
-
-        shouldInitialize.store(true);
-    }
-
-    // Now that the environment is set up, push our current state
-    triggerAsyncUpdate();
+    // Add any necessary preparation code here
 }
 
 void EffectsPluginProcessor::releaseResources()
 {
-    // When playback stops, you can use this as an opportunity to free up any
-    // spare memory, etc.
+    // Add any necessary resource cleanup code here
 }
 
-bool EffectsPluginProcessor::isBusesLayoutSupported (const AudioProcessor::BusesLayout& layouts) const
+void EffectsPluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
-    return true;
-}
-
-void EffectsPluginProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& /* midiMessages */)
-{
-    // Copy the input so that our input and output buffers are distinct
-    scratchBuffer.makeCopyOf(buffer, true);
-
-    // Clear the output buffer to prevent any garbage if our runtime isn't ready
-    buffer.clear();
-
-    // Process the elementary runtime
-    if (runtime != nullptr) {
-        runtime->process(
-            const_cast<const float**>(scratchBuffer.getArrayOfWritePointers()),
-            getTotalNumInputChannels(),
-            const_cast<float**>(buffer.getArrayOfWritePointers()),
-            buffer.getNumChannels(),
-            buffer.getNumSamples(),
-            nullptr
-        );
-    }
-}
-
-void EffectsPluginProcessor::parameterValueChanged (int parameterIndex, float newValue)
-{
-    // Mark the updated parameter value in the dirty list
-    auto& pr = *std::next(paramReadouts.begin(), parameterIndex);
-
-    pr.store({ newValue, true });
-    triggerAsyncUpdate();
-}
-
-void EffectsPluginProcessor::parameterGestureChanged (int, bool)
-{
-    // Not implemented
+    // Add any necessary audio processing code here
+    // Since this is a chat plugin, you may not need any audio processing
 }
 
 //==============================================================================
-void EffectsPluginProcessor::handleAsyncUpdate()
-{
-    // First things first, we check the flag to identify if we should initialize the Elementary
-    // runtime and engine.
-    if (shouldInitialize.exchange(false)) {
-        // TODO: This is definitely not thread-safe! It could delete a Runtime instance while
-        // the real-time thread is using it. Depends on when the host will call prepareToPlay.
-        runtime = std::make_unique<elem::Runtime<float>>(lastKnownSampleRate, lastKnownBlockSize);
-        initJavaScriptEngine();
-    }
-
-    // Next we iterate over the current parameter values to update our local state
-    // object, which we in turn dispatch into the JavaScript engine
-    auto& params = getParameters();
-
-    // Reduce over the changed parameters to resolve our updated processor state
-    for (size_t i = 0; i < paramReadouts.size(); ++i)
-    {
-        // We atomically exchange an arbitrary value with a dirty flag false, because
-        // we know that the next time we exchange, if the dirty flag is still false, the
-        // value can be considered arbitrary. Only when we exchange and find the dirty flag
-        // true do we consider the value as having been written by the processor since
-        // we last looked.
-        auto& current = *std::next(paramReadouts.begin(), i);
-        auto pr = current.exchange({0.0f, false});
-
-        if (pr.dirty)
-        {
-            if (auto* pf = dynamic_cast<juce::AudioParameterFloat*>(params[i])) {
-                auto paramId = pf->paramID.toStdString();
-                state.insert_or_assign(paramId, elem::js::Number(pr.value));
-            }
-        }
-    }
-
-    dispatchStateChange();
-}
-
 void EffectsPluginProcessor::initJavaScriptEngine()
 {
-    jsContext = choc::javascript::createQuickJSContext();
+    try {
+        jsContext = choc::javascript::createQuickJSContext();
 
-    // Install some native interop functions in our JavaScript environment
-    jsContext.registerFunction("__postNativeMessage__", [this](choc::javascript::ArgumentList args) {
-        auto const batch = elem::js::parseJSON(args[0]->toString());
-        auto const rc = runtime->applyInstructions(batch);
+        // Install native interop functions in our JavaScript environment
+        jsContext.registerFunction("__postNativeMessage__", [this](choc::javascript::ArgumentList args) {
+            try {
+                if (args.size() > 1 && args[0]->isString() && args[1]->isString()) {
+                    auto eventName = args[0]->getString();
+                    auto eventData = args[1]->getString();
 
-        if (rc != elem::ReturnCode::Ok()) {
-            dispatchError("Runtime Error", elem::ReturnCode::describe(rc));
-        }
+                    if (eventName == "sendMessage") {
+                        auto editor = dynamic_cast<WebViewEditor*>(getActiveEditor());
+                        if (editor) {
+                            auto webView = editor->getWebViewPtr();
+                            if (webView) {
+                                auto eventDataValue = choc::value::createString(eventData);
+                                webView->evaluateJavascript("globalThis.__sendMessage__(" + choc::json::toString(eventDataValue) + ")");
+                            } else {
+                                DBG("WebView pointer is null");
+                            }
+                        } else {
+                            DBG("Editor is not a WebViewEditor");
+                        }
+                    }
+                }
+            } catch (const std::exception& e) {
+                DBG("Exception in __postNativeMessage__: " << e.what());
+            } catch (...) {
+                DBG("Unknown exception in __postNativeMessage__");
+            }
 
-        return choc::value::Value();
-    });
+            return choc::value::Value();
+        });
 
-    jsContext.registerFunction("__log__", [this](choc::javascript::ArgumentList args) {
-        const auto* kDispatchScript = R"script(
+        jsContext.registerFunction("__log__", [this](choc::javascript::ArgumentList args) {
+            const auto* kDispatchScript = R"script(
 (function() {
   console.log(...JSON.parse(%));
   return true;
 })();
 )script";
 
-        // Forward logs to the editor if it's available; then logs show up in one place.
-        //
-        // If not available, we fall back to std out.
-        if (auto* editor = static_cast<WebViewEditor*>(getActiveEditor())) {
-            auto v = choc::value::createEmptyArray();
+            try {
+                if (auto* editor = static_cast<WebViewEditor*>(getActiveEditor())) {
+                    auto v = choc::value::createEmptyArray();
 
-            for (size_t i = 0; i < args.numArgs; ++i) {
-                v.addArrayElement(*args[i]);
+                    for (size_t i = 0; i < args.numArgs; ++i) {
+                        v.addArrayElement(*args[i]);
+                    }
+
+                    auto expr = juce::String(kDispatchScript).replace("%", choc::json::toString(v)).toStdString();
+                    editor->getWebViewPtr()->evaluateJavascript(expr);
+                } else {
+                    for (size_t i = 0; i < args.numArgs; ++i) {
+                        DBG(choc::json::toString(*args[i]));
+                    }
+                }
+            } catch (const std::exception& e) {
+                DBG("Exception in __log__: " << e.what());
+            } catch (...) {
+                DBG("Unknown exception in __log__");
             }
 
-            auto expr = juce::String(kDispatchScript).replace("%", elem::js::serialize(choc::json::toString(v))).toStdString();
-            editor->getWebViewPtr()->evaluateJavascript(expr);
-        } else {
-            for (size_t i = 0; i < args.numArgs; ++i) {
-                DBG(choc::json::toString(*args[i]));
+            return choc::value::Value();
+        });
+
+        jsContext.registerFunction("__sendMessage__", [this](choc::javascript::ArgumentList args) {
+            try {
+                if (args.size() > 0 && args[0]->isString()) {
+                    auto serializedMessage = args[0]->getString();
+                    auto messageJson = juce::JSON::parse(juce::String(serializedMessage.data(), serializedMessage.length()));
+
+                    if (messageJson.isObject()) {
+                        auto message = messageJson.getProperty("message", "").toString().toStdString();
+                        auto username = messageJson.getProperty("username", "").toString().toStdString();
+
+                        sendMessageToAPI(username, message);
+                    }
+                }
+            } catch (const std::exception& e) {
+                DBG("Exception in __sendMessage__: " << e.what());
+            } catch (...) {
+                DBG("Unknown exception in __sendMessage__");
             }
-        }
 
-        return choc::value::Value();
-    });
+            return choc::value::Value();
+        });
 
-    // A simple shim to write various console operations to our native __log__ handler
-    jsContext.evaluate(R"shim(
+        // A simple shim to write various console operations to our native __log__ handler
+        jsContext.evaluate(R"shim(
 (function() {
   if (typeof globalThis.console === 'undefined') {
     globalThis.console = {
@@ -309,35 +269,121 @@ void EffectsPluginProcessor::initJavaScriptEngine()
     };
   }
 })();
-    )shim");
+        )shim");
 
-    // Load and evaluate our Elementary js main file
-#if ELEM_DEV_LOCALHOST
-    auto dspEntryFile = juce::URL("http://localhost:5173/dsp.main.js");
-    auto dspEntryFileContents = dspEntryFile.readEntireTextStream().toStdString();
-#else
-    auto dspEntryFile = getAssetsDirectory().getChildFile("dsp.main.js");
+        // Load and evaluate the main.js script
+        auto chatScriptFile = getAssetsDirectory().getChildFile("main.js");
+        if (chatScriptFile.existsAsFile()) {
+            auto chatScriptContents = chatScriptFile.loadFileAsString().toStdString();
+            jsContext.evaluate(chatScriptContents);
+        } else {
+            DBG("main.js file does not exist");
+        }
+    } catch (const std::exception& e) {
+        DBG("Exception in initJavaScriptEngine: " << e.what());
+    } catch (...) {
+        DBG("Unknown exception in initJavaScriptEngine");
+    }
+}
 
-    if (!dspEntryFile.existsAsFile())
-        return;
+void EffectsPluginProcessor::sendMessageToAPI(const std::string& nickname, const std::string& message) {
+    try {
+        juce::URL url(apiSendEndpoint);
 
-    auto dspEntryFileContents = dspEntryFile.loadFileAsString().toStdString();
-#endif
-    jsContext.evaluate(dspEntryFileContents);
+        // Create postData object
+        auto postData = std::make_unique<juce::DynamicObject>();
+        postData->setProperty("nickname", juce::String(nickname));
+        postData->setProperty("message", juce::String(message));
 
-    // Re-hydrate from current state
-    const auto* kHydrateScript = R"script(
-(function() {
-  if (typeof globalThis.__receiveHydrationData__ !== 'function')
-    return false;
+        // Convert postData to JSON string
+        juce::var jsonVar(postData.get());
+        juce::String jsonString = juce::JSON::toString(jsonVar);
 
-  globalThis.__receiveHydrationData__(%);
-  return true;
-})();
-)script";
+        // Prepare the InputStreamOptions
+        auto options = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inPostData)
+                       .withExtraHeaders("Content-Type: application/json")
+                       .withConnectionTimeoutMs(10000)
+                       .withHttpRequestCmd("POST");
 
-    auto expr = juce::String(kHydrateScript).replace("%", elem::js::serialize(elem::js::serialize(runtime->snapshot()))).toStdString();
-    jsContext.evaluate(expr);
+        // Create the input stream with post data
+        auto stream = url.createInputStream(options);
+
+        if (stream != nullptr) {
+            // Process the response synchronously
+            auto responseBody = stream->readEntireStreamAsString();
+            auto responseJson = juce::JSON::parse(responseBody);
+
+            if (responseJson.isObject()) {
+                auto messagesArray = responseJson.getProperty("messages", juce::var()).getArray();
+                if (messagesArray != nullptr && messagesArray->size() > 0) {
+                    lastMessageTimestamp = messagesArray->getReference(messagesArray->size() - 1).getProperty("createdAt", 0);
+                    for (auto& messageVar : *messagesArray) {
+                        auto messageJson = juce::JSON::toString(messageVar);
+                        handleChatMessage(messageJson.toStdString());
+                    }
+                }
+            }
+        } else {
+            DBG("Failed to create input stream for sendMessageToAPI");
+        }
+    } catch (const std::exception& e) {
+        DBG("Exception in sendMessageToAPI: " << e.what());
+    } catch (...) {
+        DBG("Unknown exception in sendMessageToAPI");
+    }
+}
+
+void EffectsPluginProcessor::fetchNewMessages()
+{
+    try {
+        DBG("Entering fetchNewMessages");
+
+        juce::URL url(apiGetEndpoint);
+
+        // Create postData object
+        auto postData = std::make_unique<juce::DynamicObject>();
+        postData->setProperty("fromTimestamp", lastMessageTimestamp);
+
+        // Convert postData to JSON string
+        juce::var jsonVar(postData.get());
+        juce::String jsonString = juce::JSON::toString(jsonVar);
+
+        // Prepare the InputStreamOptions
+        auto options = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inPostData)
+                       .withExtraHeaders("Content-Type: application/json")
+                       .withConnectionTimeoutMs(10000)
+                       .withHttpRequestCmd("POST");
+
+        // Create the input stream with post data
+        auto stream = url.createInputStream(options);
+
+        if (stream != nullptr) {
+            // Process the response synchronously
+            auto responseBody = stream->readEntireStreamAsString();
+            auto responseJson = juce::JSON::parse(responseBody);
+
+            if (responseJson.isObject()) {
+                auto messagesArray = responseJson.getProperty("messages", juce::var()).getArray();
+                if (messagesArray != nullptr && messagesArray->size() > 0) {
+                    lastMessageTimestamp = messagesArray->getReference(messagesArray->size() - 1).getProperty("createdAt", 0);
+                    for (auto& messageVar : *messagesArray) {
+                        auto messageJson = juce::JSON::toString(messageVar);
+                        handleChatMessage(messageJson.toStdString());
+                    }
+                }
+            } else {
+                DBG("Response JSON is not an object");
+            }
+        } else {
+            DBG("Failed to create input stream for fetchNewMessages");
+        }
+    } catch (const std::exception& e) {
+        DBG("Exception in fetchNewMessages: " << e.what());
+    } catch (...) {
+        DBG("Unknown exception in fetchNewMessages");
+    }
+
+    DBG("Exiting fetchNewMessages");
 }
 
 void EffectsPluginProcessor::dispatchStateChange()
@@ -347,28 +393,22 @@ void EffectsPluginProcessor::dispatchStateChange()
   if (typeof globalThis.__receiveStateChange__ !== 'function')
     return false;
 
-  globalThis.__receiveStateChange__(%);
+  globalThis.__receiveStateChange__();
   return true;
 })();
 )script";
 
-    // Need the double serialize here to correctly form the string script. The first
-    // serialize produces the payload we want, the second serialize ensures we can replace
-    // the % character in the above block and produce a valid javascript expression.
-    auto localState = state;
-    localState.insert_or_assign("sampleRate", lastKnownSampleRate);
+    try {
+        if (auto* editor = static_cast<WebViewEditor*>(getActiveEditor())) {
+            editor->getWebViewPtr()->evaluateJavascript(kDispatchScript);
+        }
 
-    auto expr = juce::String(kDispatchScript).replace("%", elem::js::serialize(elem::js::serialize(localState))).toStdString();
-
-    // First we try to dispatch to the UI if it's available, because running this step will
-    // just involve placing a message in a queue.
-    if (auto* editor = static_cast<WebViewEditor*>(getActiveEditor())) {
-        editor->getWebViewPtr()->evaluateJavascript(expr);
+        jsContext.evaluate(kDispatchScript);
+    } catch (const std::exception& e) {
+        DBG("Exception in dispatchStateChange: " << e.what());
+    } catch (...) {
+        DBG("Unknown exception in dispatchStateChange");
     }
-
-    // Next we dispatch to the local engine which will evaluate any necessary JavaScript synchronously
-    // here on the main thread
-    jsContext.evaluate(expr);
 }
 
 void EffectsPluginProcessor::dispatchError(std::string const& name, std::string const& message)
@@ -386,43 +426,54 @@ void EffectsPluginProcessor::dispatchError(std::string const& name, std::string 
 })();
 )script";
 
-    // Need the serialize here to correctly form the string script.
-    auto expr = juce::String(kDispatchScript).replace("@", elem::js::serialize(name)).replace("%", elem::js::serialize(message)).toStdString();
+    try {
+        auto nameStr = juce::String(name);
+        auto messageStr = juce::String(message);
+        auto expr = juce::String(kDispatchScript).replace("@", juce::JSON::toString(nameStr)).replace("%", juce::JSON::toString(messageStr)).toStdString();
 
-    // First we try to dispatch to the UI if it's available, because running this step will
-    // just involve placing a message in a queue.
-    if (auto* editor = static_cast<WebViewEditor*>(getActiveEditor())) {
-        editor->getWebViewPtr()->evaluateJavascript(expr);
+        if (auto* editor = static_cast<WebViewEditor*>(getActiveEditor())) {
+            editor->getWebViewPtr()->evaluateJavascript(expr);
+        }
+
+        jsContext.evaluate(expr);
+    } catch (const std::exception& e) {
+        DBG("Exception in dispatchError: " << e.what());
+    } catch (...) {
+        DBG("Unknown exception in dispatchError");
     }
-
-    // Next we dispatch to the local engine which will evaluate any necessary JavaScript synchronously
-    // here on the main thread
-    jsContext.evaluate(expr);
 }
 
-//==============================================================================
-void EffectsPluginProcessor::getStateInformation (juce::MemoryBlock& destData)
-{
-    auto serialized = elem::js::serialize(state);
-    destData.replaceAll((void *) serialized.c_str(), serialized.size());
-}
-
-void EffectsPluginProcessor::setStateInformation (const void* data, int sizeInBytes)
+void EffectsPluginProcessor::handleChatMessage(std::string_view message)
 {
     try {
-        auto str = std::string(static_cast<const char*>(data), sizeInBytes);
-        auto parsed = elem::js::parseJSON(str);
-        auto o = parsed.getObject();
-        for (auto  &i: o) {
-            std::map<std::string, elem::js::Value>::iterator it;
-            it = state.find(i.first);
-            if (it != state.end()) {
-                state.insert_or_assign(i.first, i.second);
+        auto messageJson = juce::JSON::parse(juce::String(message.data(), message.length()));
+
+        if (messageJson.isObject()) {
+            auto sender = messageJson.getProperty("nickname", "").toString();
+            auto text = messageJson.getProperty("message", "").toString();
+            auto timestamp = messageJson.getProperty("createdAt", 0).toString();
+
+            auto messageObject = std::make_unique<juce::DynamicObject>();
+            messageObject->setProperty("sender", sender);
+            messageObject->setProperty("text", text);
+            messageObject->setProperty("timestamp", timestamp);
+
+            auto messageString = juce::JSON::toString(juce::var(messageObject.release()));
+
+            if (auto* editor = static_cast<WebViewEditor*>(getActiveEditor())) {
+                auto webView = editor->getWebViewPtr();
+                if (webView) {
+                    std::string jsCall = "globalThis.__receiveMessage__(" + messageString.toStdString() + ")";
+                    webView->evaluateJavascript(jsCall);
+                } else {
+                    DBG("WebView pointer is null in handleChatMessage");
+                }
             }
         }
-    } catch(...) {
-        // Failed to parse the incoming state, or the state we did parse was not actually
-        // an object type. How you handle it is up to you, here we just ignore it
+    } catch (const std::exception& e) {
+        DBG("Exception in handleChatMessage: " << e.what());
+    } catch (...) {
+        DBG("Unknown exception in handleChatMessage");
     }
 }
 

@@ -24,7 +24,6 @@ public:
 
 private:
     //==============================================================================
-    choc::value::Value handleSetParameterValueEvent(const choc::value::ValueView& e);
 
     //==============================================================================
     std::unique_ptr<choc::ui::WebView> webView;

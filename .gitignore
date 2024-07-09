@@ -24,3 +24,5 @@ public/dsp.main.js
 *.sln
 *.sw?
 *.swp
+dsp/RefMap.js
+.gitignore

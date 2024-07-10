@@ -51,13 +51,18 @@ EffectsPluginProcessor::EffectsPluginProcessor()
                       .withOutput("Output", juce::AudioChannelSet::stereo(), true)),
       jsContext(choc::javascript::createQuickJSContext())
 {
+    // Minimal and safe operations in the constructor
+}
+
+void EffectsPluginProcessor::initialize() {
+    // Initialize JavaScript engine and message fetching in a separate method
     try {
-        initJavaScriptEngine(); // Initialize the JavaScript engine in the constructor
-        startFetchingMessages(); // Start fetching messages
+        initJavaScriptEngine();
+        startFetchingMessages();
     } catch (const std::exception& e) {
-        DBG("Exception in constructor: " << e.what());
+        DBG("Initialization error: " << e.what());
     } catch (...) {
-        DBG("Unknown exception in constructor");
+        DBG("Unknown exception during initialization");
     }
 }
 
@@ -65,103 +70,11 @@ EffectsPluginProcessor::EffectsPluginProcessor()
 // Destructor
 EffectsPluginProcessor::~EffectsPluginProcessor()
 {
-    try {
-        stopFetchingMessages(); // Stop fetching messages when the processor is destroyed
-    } catch (const std::exception& e) {
-        DBG("Exception in destructor: " << e.what());
-    } catch (...) {
-        DBG("Unknown exception in destructor");
-    }
-}
-
-void EffectsPluginProcessor::startFetchingMessages()
-{
-   // startTimer(10000);  Fetch messages every 10 seconds
-}
-
-void EffectsPluginProcessor::stopFetchingMessages()
-{
-    stopTimer(); // Stop the timer
-}
-
-void EffectsPluginProcessor::timerCallback()
-{
-    fetchNewMessages(); // Fetch new messages every time the timer ticks
+    stopFetchingMessages();  // Ensure all message fetching is ceased
 }
 
 //==============================================================================
-juce::AudioProcessorEditor* EffectsPluginProcessor::createEditor()
-{
-    auto* editor = new WebViewEditor(this, getAssetsDirectory(), 2000, 500);
-    if (!editor->getWebViewPtr()) {
-        DBG("Failed to initialize WebViewEditor");
-    }
-    return editor;
-}
-
-bool EffectsPluginProcessor::hasEditor() const
-{
-    return true;
-}
-
-//==============================================================================
-const juce::String EffectsPluginProcessor::getName() const
-{
-    return JucePlugin_Name;
-}
-
-bool EffectsPluginProcessor::acceptsMidi() const
-{
-    return false;
-}
-
-bool EffectsPluginProcessor::producesMidi() const
-{
-    return false;
-}
-
-bool EffectsPluginProcessor::isMidiEffect() const
-{
-    return false;
-}
-
-double EffectsPluginProcessor::getTailLengthSeconds() const
-{
-    return 0.0;
-}
-
-//==============================================================================
-int EffectsPluginProcessor::getNumPrograms()
-{
-    return 1;
-}
-
-int EffectsPluginProcessor::getCurrentProgram()
-{
-    return 0;
-}
-
-void EffectsPluginProcessor::setCurrentProgram(int /* index */) {}
-const juce::String EffectsPluginProcessor::getProgramName(int /* index */) { return {}; }
-void EffectsPluginProcessor::changeProgramName(int /* index */, const juce::String& /* newName */) {}
-
-void EffectsPluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
-{
-    // Add any necessary preparation code here
-}
-
-void EffectsPluginProcessor::releaseResources()
-{
-    // Add any necessary resource cleanup code here
-}
-
-void EffectsPluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
-{
-    // Add any necessary audio processing code here
-    // Since this is a chat plugin, you may not need any audio processing
-}
-
-//==============================================================================
+// JavaScript engine initialization
 void EffectsPluginProcessor::initJavaScriptEngine()
 {
     try {
@@ -286,6 +199,8 @@ void EffectsPluginProcessor::initJavaScriptEngine()
     }
 }
 
+//==============================================================================
+// Message sending and fetching
 void EffectsPluginProcessor::sendMessageToAPI(const std::string& nickname, const std::string& message) {
     try {
         juce::URL url(apiSendEndpoint);
@@ -333,8 +248,7 @@ void EffectsPluginProcessor::sendMessageToAPI(const std::string& nickname, const
     }
 }
 
-void EffectsPluginProcessor::fetchNewMessages()
-{
+void EffectsPluginProcessor::fetchNewMessages() {
     try {
         DBG("Entering fetchNewMessages");
 
@@ -386,8 +300,24 @@ void EffectsPluginProcessor::fetchNewMessages()
     DBG("Exiting fetchNewMessages");
 }
 
-void EffectsPluginProcessor::dispatchStateChange()
-{
+//==============================================================================
+// Remaining plugin methods
+
+void EffectsPluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {
+    // Implement your audio processing logic here
+}
+
+void EffectsPluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
+    // Add any necessary preparation code here
+}
+
+void EffectsPluginProcessor::releaseResources() {
+    // Add any necessary resource cleanup code here
+}
+
+//==============================================================================
+// Dispatchers for state changes and errors
+void EffectsPluginProcessor::dispatchStateChange() {
     const auto* kDispatchScript = R"script(
 (function() {
   if (typeof globalThis.__receiveStateChange__ !== 'function')
@@ -411,8 +341,7 @@ void EffectsPluginProcessor::dispatchStateChange()
     }
 }
 
-void EffectsPluginProcessor::dispatchError(std::string const& name, std::string const& message)
-{
+void EffectsPluginProcessor::dispatchError(std::string const& name, std::string const& message) {
     const auto* kDispatchScript = R"script(
 (function() {
   if (typeof globalThis.__receiveError__ !== 'function')
@@ -443,8 +372,7 @@ void EffectsPluginProcessor::dispatchError(std::string const& name, std::string 
     }
 }
 
-void EffectsPluginProcessor::handleChatMessage(std::string_view message)
-{
+void EffectsPluginProcessor::handleChatMessage(std::string_view message) {
     try {
         auto messageJson = juce::JSON::parse(juce::String(message.data(), message.length()));
 
@@ -478,8 +406,57 @@ void EffectsPluginProcessor::handleChatMessage(std::string_view message)
 }
 
 //==============================================================================
-// This creates new instances of the plugin..
-juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
-{
-    return new EffectsPluginProcessor();
+// Editor creation
+juce::AudioProcessorEditor* EffectsPluginProcessor::createEditor() {
+    auto* editor = new WebViewEditor(this, getAssetsDirectory(), 2000, 500);
+    if (!editor->getWebViewPtr()) {
+        DBG("Failed to initialize WebViewEditor");
+    }
+    return editor;
+}
+
+bool EffectsPluginProcessor::hasEditor() const {
+    return true;
+}
+
+//==============================================================================
+// Plugin properties
+const juce::String EffectsPluginProcessor::getName() const {
+    return JucePlugin_Name;
+}
+
+bool EffectsPluginProcessor::acceptsMidi() const {
+    return false;
+}
+
+bool EffectsPluginProcessor::producesMidi() const {
+    return false;
+}
+
+bool EffectsPluginProcessor::isMidiEffect() const {
+    return false;
+}
+
+double EffectsPluginProcessor::getTailLengthSeconds() const {
+    return 0.0;
+}
+
+int EffectsPluginProcessor::getNumPrograms() {
+    return 1;
+}
+
+int EffectsPluginProcessor::getCurrentProgram() {
+    return 0;
+}
+
+void EffectsPluginProcessor::setCurrentProgram(int /* index */) {}
+const juce::String EffectsPluginProcessor::getProgramName(int /* index */) { return {}; }
+void EffectsPluginProcessor::changeProgramName(int /* index */, const juce::String& /* newName */) {}
+
+//==============================================================================
+// Factory function
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter() {
+    auto* processor = new EffectsPluginProcessor();
+    processor->initialize();  // Ensure initialize is called after construction
+    return processor;
 }

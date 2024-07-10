@@ -248,7 +248,8 @@ void EffectsPluginProcessor::sendMessageToAPI(const std::string& nickname, const
     }
 }
 
-void EffectsPluginProcessor::fetchNewMessages() {
+void EffectsPluginProcessor::fetchNewMessages()
+{
     try {
         DBG("Entering fetchNewMessages");
 
@@ -301,22 +302,7 @@ void EffectsPluginProcessor::fetchNewMessages() {
 }
 
 //==============================================================================
-// Remaining plugin methods
-
-void EffectsPluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {
-    // Implement your audio processing logic here
-}
-
-void EffectsPluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
-    // Add any necessary preparation code here
-}
-
-void EffectsPluginProcessor::releaseResources() {
-    // Add any necessary resource cleanup code here
-}
-
-//==============================================================================
-// Dispatchers for state changes and errors
+// State dispatchers
 void EffectsPluginProcessor::dispatchStateChange() {
     const auto* kDispatchScript = R"script(
 (function() {
@@ -452,6 +438,34 @@ int EffectsPluginProcessor::getCurrentProgram() {
 void EffectsPluginProcessor::setCurrentProgram(int /* index */) {}
 const juce::String EffectsPluginProcessor::getProgramName(int /* index */) { return {}; }
 void EffectsPluginProcessor::changeProgramName(int /* index */, const juce::String& /* newName */) {}
+
+//==============================================================================
+// Timer control for fetching messages
+void EffectsPluginProcessor::startFetchingMessages() {
+    startTimer(10000);  // Fetch messages every 10 seconds
+}
+
+void EffectsPluginProcessor::stopFetchingMessages() {
+    stopTimer();  // Stop the timer
+}
+
+void EffectsPluginProcessor::timerCallback() {
+    fetchNewMessages();  // Fetch new messages every time the timer ticks
+}
+
+//==============================================================================
+// Audio Processing methods
+void EffectsPluginProcessor::prepareToPlay(double sampleRate, int samplesPerBlock) {
+    // Add any necessary preparation code here
+}
+
+void EffectsPluginProcessor::releaseResources() {
+    // Add any necessary resource cleanup code here
+}
+
+void EffectsPluginProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) {
+    // Implement your audio processing logic here
+}
 
 //==============================================================================
 // Factory function

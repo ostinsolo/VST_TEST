@@ -1,4 +1,6 @@
 // src/main.js
+import axios from 'axios';
+
 const API_BASE_URL = 'http://ableton-chat-01-72c15f63599a.herokuapp.com';
 const API_SEND_ENDPOINT = `${API_BASE_URL}/messages/send`;
 const API_GET_ENDPOINT = `${API_BASE_URL}/messages/get`;
@@ -7,33 +9,18 @@ let lastMessageTimestamp = 0;
 
 async function sendMessageToAPI(nickname, message) {
   try {
-    const response = await fetch(API_SEND_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ nickname, message }),
-    });
-    if (!response.ok) throw new Error('Failed to send message');
+    const response = await axios.post(API_SEND_ENDPOINT, { nickname, message });
     console.log('Message sent successfully');
     fetchNewMessages();
   } catch (error) {
-    console.error('Error sending message:', error);
+    console.error('Error sending message:', error.response ? error.response.data : error.message);
   }
 }
 
 async function fetchNewMessages() {
   try {
-    const response = await fetch(API_GET_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ fromTimestamp: lastMessageTimestamp }),
-    });
-    if (!response.ok) throw new Error('Failed to fetch messages');
-    const data = await response.json();
-    const messages = data.messages;
+    const response = await axios.post(API_GET_ENDPOINT, { fromTimestamp: lastMessageTimestamp });
+    const messages = response.data.messages;
     if (messages.length > 0) {
       lastMessageTimestamp = messages[messages.length - 1].createdAt;
       messages.forEach(msg => {
@@ -41,7 +28,7 @@ async function fetchNewMessages() {
       });
     }
   } catch (error) {
-    console.error('Error fetching messages:', error);
+    console.error('Error fetching messages:', error.response ? error.response.data : error.message);
   }
 }
 
